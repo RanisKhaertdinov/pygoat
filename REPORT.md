@@ -26,7 +26,7 @@ We added a `dast_scan` job in [`.github/workflows/lab5.yml`](.github/workflows/l
 
 The job pulls `pygoat/pygoat:latest`, starts it on port `8000`, waits until the app responds, then runs an OWASP ZAP baseline scan against `http://127.0.0.1:8000`. The ZAP report is uploaded as the `zap-report` artifact.
 
-**Pipeline run:** [Task 3 — DAST](https://github.com/RanisKhaertdinov/pygoat/actions/runs/45242709548) (job **Run DAST Scan** — success)
+**Pipeline run:** [Task 3 — DAST](https://github.com/RanisKhaertdinov/pygoat/actions/runs/45244450974) (job **Run DAST Scan** — success)
 
 **Report copy in the repo:** [reports/zap/report_md.md](reports/zap/report_md.md)
 
