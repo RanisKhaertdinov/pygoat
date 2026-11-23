@@ -18,6 +18,35 @@ Bandit returned exit code 1 because it found issues that met the configured seve
 
 **Pipeline run:** [Task 2 — Bandit and Docker Scout](https://github.com/RanisKhaertdinov/pygoat/actions/runs/45200029446)
 
+## Task 3 — DAST
+
+**Author:** Anton Bugaev
+
+We added a `dast_scan` job in [`.github/workflows/lab5.yml`](.github/workflows/lab5.yml). It runs on its own (no `needs` on Bandit / Docker Scout), because those jobs fail when they find issues — that is expected for this lab.
+
+The job pulls `pygoat/pygoat:latest`, starts it on port `8000`, waits until the app responds, then runs an OWASP ZAP baseline scan against `http://127.0.0.1:8000`. The ZAP report is uploaded as the `zap-report` artifact.
+
+**Pipeline run:** [Task 3 — DAST](https://github.com/RanisKhaertdinov/pygoat/actions/runs/45242709548) (job **Run DAST Scan** — success)
+
+**Report copy in the repo:** [reports/zap/report_md.md](reports/zap/report_md.md)
+
+### ZAP summary
+
+| Risk | Alerts |
+|---|---|
+| High | 0 |
+| Medium | 3 |
+| Low | 8 |
+| Informational | 6 |
+
+Medium findings:
+
+| Alert | CWE |
+|---|---|
+| Content Security Policy (CSP) Header Not Set | CWE-693 |
+| Absence of Anti-CSRF Tokens | CWE-352 |
+| Source Code Disclosure - Python | CWE-540 |
+
 ## Task 4 — Vulnerability Analysis
 
 ### Ranis Haertdinov — CVE-2020-14343 in PyYAML
