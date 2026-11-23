@@ -22,37 +22,43 @@ Bandit returned exit code 1 because it found issues that met the configured seve
 
 **Author:** Anton Bugaev
 
-We added a `dast_scan` job to [`.github/workflows/lab5.yml`](.github/workflows/lab5.yml). The job does not use `needs` on Bandit or Docker Scout. Those jobs fail when they find issues, and that is expected in this lab. If DAST waited for them, it would never run.
+For DAST I added a third job, `dast_scan`, in [`.github/workflows/lab5.yml`](.github/workflows/lab5.yml).
 
-What the job does:
+I did not put `needs: [sast_scan, image_scan]` on it. Bandit and Docker Scout exit with failure when they find issues (that is normal for this lab). If DAST depended on them, GitHub Actions would skip it every time.
 
-1. Pull and start `pygoat/pygoat:latest` on port `8000` (official image, as allowed in the lab).
-2. Wait until `http://127.0.0.1:8000` answers (curl loop, about 60 seconds max).
-3. Run an OWASP ZAP baseline scan with `zaproxy/action-baseline@v0.14.0`.
-4. Upload the ZAP output as the `zap-report` artifact (HTML, JSON, Markdown).
-5. Stop the container.
+Building our own image in CI was flaky earlier, so I used the option from the lab handout: pull the official image and run it on the runner.
 
-**Pipeline run:** [Task 3 — DAST](https://github.com/RanisKhaertdinov/pygoat/actions/runs/45244450974)  
-Job **Run DAST Scan** finished successfully (~2m25s). Bandit and Docker Scout failed in the same run because of findings — that is expected.
+```bash
+docker pull pygoat/pygoat:latest
+docker run --rm -d --name pygoat -p 8000:8000 pygoat/pygoat:latest
+```
 
-**Report in the repo:** [reports/zap/report_md.md](reports/zap/report_md.md)
+Before scanning I wait until the app answers. The step curls `http://127.0.0.1:8000/` in a loop (up to ~60s). If it never comes up, the job fails and prints `docker logs`.
 
-### ZAP summary
+Then I run OWASP ZAP baseline against that URL with `zaproxy/action-baseline@v0.14.0`. `fail_action` is false so alerts are written to the report even when ZAP finds medium issues. The report is uploaded as the `zap-report` artifact (HTML, JSON, Markdown). A copy is also in the repo: [reports/zap/report_md.md](reports/zap/report_md.md).
 
-| Risk | Alerts |
+**Pipeline run:** [Task 3 — DAST](https://github.com/RanisKhaertdinov/pygoat/actions/runs/45244450974)
+
+In that run **Run DAST Scan** is green (~2m25s). Bandit and Scout are red in the same run because of findings — expected.
+
+### What ZAP reported
+
+Target: `http://127.0.0.1:8000`
+
+| Risk | Count |
 |---|---|
 | High | 0 |
 | Medium | 3 |
 | Low | 8 |
 | Informational | 6 |
 
-Medium findings from the scan:
+Medium alerts:
 
-| Alert | CWE | What it means |
-|---|---|---|
-| Content Security Policy (CSP) Header Not Set | CWE-693 | Responses do not send a CSP header, so the browser has weaker XSS protections. |
-| Absence of Anti-CSRF Tokens | CWE-352 | Some forms have no anti-CSRF token, so a third-party site could try to submit them. |
-| Source Code Disclosure - Python | CWE-540 | A response looks like it exposes Python source, which helps an attacker learn how the app works. |
+1. **CSP Header Not Set (CWE-693)** — pages like `/`, `/login/`, `/auth` do not send a `Content-Security-Policy` header. Without CSP the browser does less to block XSS / injection of scripts.
+2. **Absence of Anti-CSRF Tokens (CWE-352)** — ZAP flagged forms that have no CSRF token, including Google login (`/accounts/google/login/`, POST). A malicious site could try to submit those forms in the user’s browser session.
+3. **Source Code Disclosure - Python (CWE-540)** — on `POST /accounts/password/reset/` ZAP decided the response looks like Python source. That leaks how the endpoint is implemented and makes further attacks easier.
+
+Low alerts (short list): missing `X-Content-Type-Options`, cookies without `HttpOnly`, server version in the `Server` header, application error pages, missing Permissions-Policy / CORP / COEP. Full list is in the ZAP Markdown report linked above.
 
 ## Task 4 — Vulnerability Analysis
 
@@ -85,29 +91,29 @@ Docker Scout found **PyYAML 5.1** in our PyGoat image. It rated this issue **9.3
 
 ### Anton Bugaev — CVE-2024-34069 in Werkzeug
 
-Docker Scout found **Werkzeug 2.1.2** in our PyGoat image. It rated this issue **7.5/10 (High)**.
+Docker Scout found **Werkzeug 2.1.2** in the image (`pkg:pypi/werkzeug@2.1.2`). Severity in the Scout report: **7.5 High**. Affected range: `< 3.0.3`. Fixed in **3.0.3**.
 
-**What is the problem?** Werkzeug ships a debugger for development. In versions before **3.0.3**, an attacker who controls a domain and a subdomain can try to get a developer to open that site and enter the debugger PIN. If that works, the attacker can use the debugger even when the app only listens on localhost, and can run code on the developer’s machine. The attacker also needs to guess a URL that triggers the debugger. Our image has Werkzeug **2.1.2**, which is in the affected range (`< 3.0.3`). The fix is **3.0.3**.
+**What is the problem?** Werkzeug has an interactive debugger used while developing. In vulnerable versions, if a developer opens a page on a domain/subdomain controlled by an attacker and types in the debugger PIN, the attacker can reach that debugger even when the app is bound to localhost. From there they can run code on the developer machine. They also need to hit a URL that actually opens the debugger. We only confirmed the vulnerable package version from the scan; we did not reproduce the full attack against PyGoat.
 
-**CVSS score:** NVD / GitHub Advisory give this issue **7.5/10 (High)**. The vector below is from NVD (CVSS 3.1).
+**CVSS score:** NVD lists **7.5 High** (CVSS 3.1):
 
 `CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:H`
 
 | Metric | Meaning |
 |---|---|
-| Attack Vector (AV:N) | The attack starts over the network (attacker-controlled site). |
-| Attack Complexity (AC:H) | The attack is hard: the attacker needs a matching domain/subdomain setup, a guessed debugger URL, and the PIN. |
-| Privileges Required (PR:N) | The attacker needs no account in our app. |
-| User Interaction (UI:R) | A developer must open the attacker’s site and enter the debugger PIN. |
-| Scope (S:U) | The impact stays on the same system (the developer machine / process). |
-| Confidentiality (C:H) | Successful RCE can expose private data on that machine. |
-| Integrity (I:H) | The attacker can change files or application state. |
-| Availability (A:H) | The attacker can stop or break the process. |
+| Attack Vector (AV:N) | Starts from the network (attacker hosts the evil page). |
+| Attack Complexity (AC:H) | Needs the domain/subdomain trick, a debugger URL, and the PIN. Not a one-click script-kiddie bug. |
+| Privileges Required (PR:N) | No account inside PyGoat. |
+| User Interaction (UI:R) | Someone has to open the attacker’s page and enter the PIN. |
+| Scope (S:U) | Impact is on that same machine/process. |
+| Confidentiality (C:H) | Code execution can dump secrets / files. |
+| Integrity (I:H) | Attacker can change data or code. |
+| Availability (A:H) | Attacker can kill or break the process. |
 
-**Privilege level needed:** No login to PyGoat. The attacker needs the victim (usually a developer with the Werkzeug debugger on) to interact with the attacker’s domain and enter the PIN.
+**Privilege level:** no app login. The weak point is a developer with the Werkzeug debugger enabled who interacts with the attacker’s site.
 
-**Real-world impact:** A developer running a local Flask/Werkzeug app with the debugger enabled could be tricked into giving an attacker a remote shell on their machine. In a team that debugs web apps locally, that can lead to stolen source code, tokens, or further access to company systems.
+**Real-world impact:** Local Flask debugging is common. If this works, the attacker gets a shell on the laptop — source, `.env`, SSH keys, cloud tokens, whatever is there.
 
-**Evidence:** [Docker Scout report](reports/scout-report.sarif) · [Pipeline run with Scout findings](https://github.com/RanisKhaertdinov/pygoat/actions/runs/45244450974)
+**Evidence:** [Docker Scout report](reports/scout-report.sarif) · [Pipeline run](https://github.com/RanisKhaertdinov/pygoat/actions/runs/45244450974)
 
-**Sources:** [NVD](https://nvd.nist.gov/vuln/detail/CVE-2024-34069) · [GitHub Advisory GHSA-2g68-c3qc-8985](https://github.com/advisories/GHSA-2g68-c3qc-8985) · [Werkzeug fix](https://github.com/pallets/werkzeug/security/advisories/GHSA-2g68-c3qc-8985)
+**Sources:** [NVD CVE-2024-34069](https://nvd.nist.gov/vuln/detail/CVE-2024-34069) · [GHSA-2g68-c3qc-8985](https://github.com/advisories/GHSA-2g68-c3qc-8985)
